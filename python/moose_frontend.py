@@ -71,10 +71,22 @@ class FrontendOptions:
 
 
 def resolve_config_path(parsed: argparse.Namespace) -> Path | None:
-    """Return the selected config path, favoring the positional argument."""
+    """Return the selected config path, favoring the positional argument.
+
+    The path is made absolute because the Julia subprocess is launched with
+    ``cwd=REPO_ROOT``: a relative path is validated here against the caller's
+    working directory but would be resolved by Julia against the repository
+    root, so it has to be pinned down before it crosses that boundary.
+    """
 
     config_value = parsed.config or parsed.config_path
-    return Path(config_value) if config_value else None
+    return _absolute_path(config_value) if config_value else None
+
+
+def _absolute_path(value: str) -> Path:
+    """Expand ``~`` and make ``value`` absolute against the caller's cwd."""
+
+    return Path(value).expanduser().resolve()
 
 
 def build_julia_args(options: FrontendOptions) -> List[str]:
@@ -254,6 +266,14 @@ def validate_args(parser: argparse.ArgumentParser, parsed: argparse.Namespace) -
                 + ", ".join(missing_faraday)
             )
 
+    # `base_dir` goes through `abspath` in normalize_base_dir, which resolves
+    # against the Julia process cwd (REPO_ROOT), so it needs the same treatment
+    # as the config path. `simu` and `interpolation` are deliberately left
+    # alone: collect_simulations and the interpolation lookup join them onto
+    # `base_dir` when they are relative, so absolutizing them here against the
+    # caller's cwd would break the documented "base_dir + folder name" usage.
+    base_dir = str(_absolute_path(parsed.base_dir)) if parsed.base_dir else None
+
     return FrontendOptions(
         config_path=config_path,
         julia_binary=parsed.julia_binary,
@@ -262,7 +282,7 @@ def validate_args(parser: argparse.ArgumentParser, parsed: argparse.Namespace) -
         dry_run=parsed.dry_run,
         write_back=parsed.write_back,
         plan=parsed.plan,
-        base_dir=parsed.base_dir,
+        base_dir=base_dir,
         simu=tuple(parsed.simu or ()),
         los=los,
         interpolation=parsed.interpolation,
