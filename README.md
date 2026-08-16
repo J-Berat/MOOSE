@@ -25,7 +25,9 @@ configuration and provenance metadata.
 
 ## Installation
 
-Moose requires [Julia 1.10 or later](https://julialang.org/downloads/).
+Moose requires [Julia 1.10 or later](https://julialang.org/downloads/). The
+optional Python wrapper requires Python 3.8 or later and uses only the standard
+library.
 Clone the repository, enter its directory, and install the dependencies:
 
 ```bash

@@ -16,7 +16,7 @@ import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List
 
@@ -319,7 +319,9 @@ def _log_invocation(log_file: Path, command: Iterable[str], status: int, message
 
     log_file.parent.mkdir(parents=True, exist_ok=True)
     entry = {
-        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        # `timezone.utc` rather than `datetime.UTC`: the latter is an alias
+        # added in 3.11 and was the only thing pinning this script to it.
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "command": list(command),
         "command_string": format_command(command),
         "status": status,

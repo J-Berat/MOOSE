@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import tempfile
 import unittest
 from contextlib import contextmanager, redirect_stdout
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -163,6 +165,13 @@ class MooseFrontendStateTests(FrontendTestCase):
             self.assertIn('"status": 0', log_text)
             self.assertIn('"message": "Dry run: Julia command not executed."', log_text)
             self.assertIn('"--los", "x", "--los", "y", "--los", "z"', log_text)
+
+            # UTC instant, "Z" suffix rather than "+00:00". Guards the switch
+            # from datetime.UTC (3.11+) to timezone.utc.
+            timestamp = json.loads(log_text)["timestamp"]
+            self.assertTrue(timestamp.endswith("Z"), timestamp)
+            parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            self.assertEqual(parsed.utcoffset(), timedelta(0))
 
 
 class MooseFrontendPathResolutionTests(FrontendTestCase):
