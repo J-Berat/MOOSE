@@ -164,13 +164,13 @@ function plot_power_spectrum_figure(field::AbstractMatrix; pixel_size::Real = 1.
     fig = CairoMakie.Figure(; fig_kwargs...)
     left = fig[1, 1] = CairoMakie.GridLayout()
 
-    ax2d = CairoMakie.Axis(left[1, 1]; title = "Spectre de puissance 2D",
+    ax2d = CairoMakie.Axis(left[1, 1]; title = "2D power spectrum",
         xlabel = "kₓ (cycles/pixel)", ylabel = "k_y (cycles/pixel)")
     hm = CairoMakie.heatmap!(ax2d, kx, ky, heatmap_values; colormap = colormap)
     CairoMakie.Colorbar(left[1, 2], hm; label = log2d ? "log₁₀ PSD" : "PSD")
     CairoMakie.tightlimits!(ax2d)
 
-    ax1d = CairoMakie.Axis(fig[1, 2]; title = "PSD radiale",
+    ax1d = CairoMakie.Axis(fig[1, 2]; title = "Radially averaged PSD",
         xlabel = "|k| (cycles/pixel)", ylabel = "PSD")
     if log1d
         ax1d.xscale = CairoMakie.log10

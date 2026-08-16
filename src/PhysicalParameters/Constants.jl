@@ -11,7 +11,7 @@ const M_e = 9.109e-28 # electron mass in g
 const M_p = 1.6726231e-24 # proton mass in g
 const C = 2.99792458e10 # speed of light in cm.s^-1
 const K_B = 1.380649e-16 # Boltzmann constant in cm^2 g s^-2 K^-1
-const J_0 = 2.1e18 # prefactor of j_e en e^-1 s^-1 cm^-2 sr^-1, Padovani,Galli 2018 SKA
+const J_0 = 2.1e18 # prefactor of j_e in e^-1 s^-1 cm^-2 sr^-1, Padovani,Galli 2018 SKA
 const RM_PREFACTOR = 0.81 #microG^-1 pc^-1 cm^-3
 
 # Unit conversion

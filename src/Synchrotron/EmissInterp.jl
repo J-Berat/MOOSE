@@ -46,7 +46,7 @@ Calculate the emissivity for a range of magnetic fields and frequencies, and wri
 - `nuArray::AbstractArray`: Array of frequencies in MHz.
 
 # Returns
-- `Nothing`: This function does not return a value but writes the results to a file named "emissivite_interp_LOFAR.dat".
+- `Nothing`: This function does not return a value but writes the results to a file named "emissivity.dat" in the current working directory.
 
 # Description
 This function calculates the parallel and perpendicular emissivities for each combination of magnetic field strengths and frequencies provided in `BArray` and `nuArray`. The results are written to a file named "emissivity.dat" in a tab-separated format with columns for magnetic field strength (`B`), frequency (`nu`), parallel emissivity (`e_para`), and perpendicular emissivity (`e_perp`).
@@ -56,8 +56,8 @@ This function calculates the parallel and perpendicular emissivities for each co
 BArray = [1.0, 2.0, 3.0]
 nuArray = [100, 200, 300]
 EmissInterp(BArray, nuArray)
+```
 """
-
 function EmissInterp(BArray::AbstractArray,nuArray::AbstractArray)
     open("emissivity.dat", "w") do f
       write(f, "B\tnu\te_para\te_perp\n")    
