@@ -27,7 +27,10 @@ RUN apt-get update \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
-COPY Project.toml Manifest.toml ./
+# Only Project.toml is copied: the Manifest is resolved at build time so the
+# image tracks the compat bounds rather than a pinned resolution. Keeping this
+# COPY before the sources preserves Docker layer caching for the dependencies.
+COPY Project.toml ./
 
 RUN for attempt in 1 2 3; do \
         julia --startup-file=no --project=/app -e 'using Pkg; Pkg.instantiate()' && break; \
@@ -35,7 +38,7 @@ RUN for attempt in 1 2 3; do \
         sleep 10; \
     done
 
-COPY README.md Version.toml setup.jl ./
+COPY README.md setup.jl ./
 COPY config ./config
 COPY python ./python
 COPY src ./src

@@ -2297,3 +2297,82 @@ end
         @test all(isfile, paths.fdf)
     end
 end
+
+@testset "Synchrotron emissivity kernels" begin
+    # Regression guard: `besselk` and `quadgk` were used in EmissInterp.jl while
+    # neither SpecialFunctions nor QuadGK was imported by the Moose module, so
+    # every call below threw UndefVarError at runtime. Nothing exercised this
+    # path, because the pipeline reads a precomputed emissivity table.
+
+    # G(x) = x K_{2/3}(x) is closed form; F(x) = x ∫_x^∞ K_{5/3}(t) dt is the
+    # standard synchrotron kernel. For x << 1 both grow as x^{1/3} with
+    # F(x) → 2.1495 x^{1/3}, G(x) → 1.0747 x^{1/3}, hence F/G → 2. The leading
+    # term is accurate to 0.2% at x = 1e-4 and degrades to 4% by x = 1e-2, so
+    # stay well inside the asymptotic regime to keep the margin meaningful.
+    for x in (1.0e-5, 1.0e-4)
+        @test Moose.F(x) > 0
+        @test Moose.G(x) > 0
+        @test isapprox(Moose.G(x), 1.0747 * cbrt(x); rtol = 0.02)
+        @test isapprox(Moose.F(x), 2.1495 * cbrt(x); rtol = 0.02)
+        @test isapprox(Moose.F(x) / Moose.G(x), 2.0; rtol = 0.02)
+    end
+
+    # For x >> 1 both decay as sqrt(pi x / 2) exp(-x); the leading corrections
+    # are 55/(72x) for F and 7/(72x) for G, so F stays slightly above G.
+    @test Moose.F(10.0) > Moose.G(10.0)
+    @test isapprox(Moose.F(10.0) / Moose.G(10.0), 1.0; rtol = 0.15)
+    @test Moose.F(30.0) < Moose.F(10.0)
+
+    # besselk underflows for very large arguments instead of raising, which is
+    # what keeps the low-energy end of the emissivity integral well defined.
+    @test Moose.F(1.0e6) == 0.0
+end
+
+@testset "Synchrotron emissivity integrals" begin
+    # One evaluation per polarization direction: these are nested adaptive
+    # quadratures (an inner quadgk inside the integrand), so they are the slow
+    # part of this file. 150 MHz / 3 microG puts the emission peak near 1.8 GeV,
+    # well inside the [m_e c^2, 1e10] eV integration range.
+    nu_MHz = 150.0
+    B_microG = 3.0
+
+    e_par = Moose.par_emissivity(nu_MHz, B_microG)
+    e_perp = Moose.perp_emissivity(nu_MHz, B_microG)
+
+    @test isfinite(e_par)
+    @test isfinite(e_perp)
+    @test e_par > 0
+    @test e_perp > 0
+
+    # power_perp - power_par = 2 PRE_P B G(x) > 0 at every energy, so the
+    # perpendicular emissivity dominates at every frequency and field strength.
+    @test e_perp > e_par
+
+    # A stronger field shifts the critical frequency up and raises the
+    # emissivity at fixed observing frequency.
+    @test Moose.perp_emissivity(nu_MHz, 6.0) > e_perp
+end
+
+@testset "EmissInterp writes an emissivity table" begin
+    mktempdir() do dir
+        cd(dir) do
+            # EmissInterp writes "emissivity.dat" into the working directory,
+            # so the path stays relative to the temporary directory here.
+            Moose.EmissInterp([1.0], [150.0])
+            @test isfile("emissivity.dat")
+
+            lines = readlines("emissivity.dat")
+            @test lines[1] == "B\tnu\te_para\te_perp"
+            @test length(lines) == 2
+
+            fields = split(lines[2], '\t')
+            @test length(fields) == 4
+            @test parse(Float64, fields[1]) == 1.0
+            @test parse(Float64, fields[2]) == 150.0
+            e_para = parse(Float64, fields[3])
+            e_perp = parse(Float64, fields[4])
+            @test e_para > 0
+            @test e_perp > e_para
+        end
+    end
+end

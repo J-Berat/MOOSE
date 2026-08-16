@@ -15,8 +15,10 @@ using Dierckx
 using FFTW
 using LinearAlgebra
 using Logging
+using QuadGK: quadgk
 using Random
 using SHA
+using SpecialFunctions: besselk
 using TOML
 
 include(joinpath("Utils", "ArrayMath.jl"))

@@ -4,3 +4,21 @@
 .fuse_hidden*
 __pycache__/
 *.py[cod]
+
+# Julia environments: Moose is a package, so the dependency resolution is left
+# to Pkg at install time instead of being pinned in the repository.
+/Manifest.toml
+LocalPreferences.toml
+
+# Julia build and profiling artifacts
+/docs/build/
+/docs/site/
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+*.cov
+
+# Editor and tooling scratch files
+.vscode-pluto-auth-tmp.txt
+.vscode/
+*.swp
