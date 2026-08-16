@@ -71,6 +71,40 @@ MOOSE_from_config(demo.config_path; quiet=true)
 Results are written as FITS files alongside the selected simulation. Each run
 also records its configuration, provenance, and timing in `MOOSE_summary.log`.
 
+### Optional all-sky example data
+
+The Pluto tutorial can analyze the public Galactic Faraday rotation sky 2020
+map by Hutschenreuter et al. The 24 MB normalized FITS file is intentionally not
+stored in this repository. Download the current `faradaysky2020v2` release from
+the [official MPA data page](https://wwwmpa.mpa-garching.mpg.de/~ensslin/research/data/faraday2020.html)
+and convert it to MOOSE's HEALPix convention with:
+
+```bash
+julia --startup-file=no --project=. scripts/download_faraday2020.jl
+```
+
+The script verifies the upstream SHA-256 checksum, extracts
+`faraday_sky_mean`, and writes `data/faraday2020v2.fits` as an NSIDE 512,
+RING-ordered HEALPix map in Galactic coordinates. The data are distributed by
+their authors under the ODC-By 1.0 license.
+
+### Reprise après interruption
+
+Pour les grands calculs tuilés, activez ensemble `tile_size` et
+`"resume": "safe"`. MOOSE enregistre alors un checkpoint atomique après
+chaque bande terminée. Si le processus est interrompu, relancer exactement la
+même commande reprend à la bande suivante. Le checkpoint est ignoré et le
+calcul redémarre proprement si la configuration, les entrées ou le découpage
+en tuiles ont changé. Avec `"resume": "off"`, les fichiers partiels sont
+supprimés comme auparavant.
+
+```json
+{
+  "tile_size": 256,
+  "resume": "safe"
+}
+```
+
 ### AMR inputs
 
 MOOSE accepts AMR leaf cells stored in HDF5 and conservatively rasterizes each

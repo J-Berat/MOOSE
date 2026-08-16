@@ -21,7 +21,8 @@ package is developed through the relative path `..`.
 julia --project=notebooks notebooks/export.jl
 ```
 
-The export aborts if any Pluto cell fails.
+The export aborts if any Pluto cell fails. The generated
+`notebooks/MOOSE_tutorial.html` file is intentionally ignored by Git.
 
 ## Automated notebook validation
 
@@ -32,4 +33,10 @@ julia --project=notebooks notebooks/check_notebook.jl
 This executes both the one-screen and two-screen mock scenarios.
 
 Figures saved from the notebook (§16, "Save the summary figure") are written to
-`outputs/` at the repository root.
+`outputs/` at the repository root. Generated PDF and PNG files in that
+directory are intentionally ignored by Git; `outputs/.gitkeep` only preserves
+the directory.
+
+The optional real-data section uses the Galactic Faraday rotation sky 2020
+map. Follow the download and checksum instructions in the repository
+`README.md`; the notebook expects the file at `data/faraday2020v2.fits`.

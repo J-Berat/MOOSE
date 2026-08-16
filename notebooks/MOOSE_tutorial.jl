@@ -2561,22 +2561,23 @@ real_data_status.ok ?
 
 # ╔═╡ 00000000-0000-0000-0000-000000001212
 md"""
-## 19.2 — HEALPix: a real dataset shipped with the repository
+## 19.2 — HEALPix: an optional real dataset
 
-The repository contains a real HEALPix file (`allsky_RM_julia_nside512.fits`, an all-sky rotation
-measure map): we use it to exercise MOOSE's exported HEALPix functions on real data, with a path
-derived from `@__DIR__` (never a hardcoded path).
+This section uses the public Galactic Faraday rotation sky 2020 map to exercise
+MOOSE's exported HEALPix functions on real data. The dataset is not versioned
+with MOOSE; follow the download instructions in `README.md` before running this
+optional section.
 """
 
 # ╔═╡ 00000000-0000-0000-0000-000000001213
-allsky_rm_path = joinpath(MOOSE_ROOT, "allsky_RM_julia_nside512.fits")
+allsky_rm_path = joinpath(MOOSE_ROOT, "data", "faraday2020v2.fits")
 
 # ╔═╡ 00000000-0000-0000-0000-000000001214
 allsky_kind = isfile(allsky_rm_path) ? detect_fits_grid(allsky_rm_path) : :absent
 
 # ╔═╡ 00000000-0000-0000-0000-000000001215
 if allsky_kind == :absent
-	md"⚠️ `allsky_RM_julia_nside512.fits` was not found in this repository: this subsection is skipped."
+	md"⚠️ `data/faraday2020v2.fits` was not found: follow the download instructions in `README.md` or skip this optional subsection."
 elseif allsky_kind != :healpix
 	md"⚠️ File found but it is not a HEALPix map according to `Moose.detect_fits_grid`."
 else
@@ -2816,9 +2817,9 @@ coverage_rows = [
 	("healpix_map", true, false, "—", "Low-level constructor (vector+nside → Healpix.HealpixMap) used internally by read/write_healpix_map; §19 uses these higher-level wrappers directly."),
 	("healpix_maps_from_stack", true, false, "—", "Extracts a list of HealpixMap from a HealpixStack; §19 accesses the `.pixels` field directly, more direct for vectorized statistics."),
 	("read_healpix_map", true, false, "—", "Keeps the HEALPIX_UNSEEN sentinel as-is; §19.2 prefers `read_healpix_stack`, which converts it to NaN (safer for `mean`/`filter`)."),
-	("read_healpix_stack", true, true, "§19.2", "Reads the all-sky RM map shipped with the repository, with automatic NaN masking."),
-	("detect_fits_grid", true, true, "§19.1, §19.2", "Distinguishes cartesian/HEALPix on the all-sky file shipped with the repository."),
-	("is_healpix_fits", true, true, "§19.2", "Checks the nature of the `allsky_RM_julia_nside512.fits` file."),
+	("read_healpix_stack", true, true, "§19.2", "Reads the optional all-sky RM map, with automatic NaN masking."),
+	("detect_fits_grid", true, true, "§19.1, §19.2", "Distinguishes cartesian/HEALPix on the downloaded all-sky file."),
+	("is_healpix_fits", true, true, "§19.2", "Checks the nature of the optional `data/faraday2020v2.fits` file."),
 	("is_image_fits", true, false, "—", "Same mechanism as `is_healpix_fits` (shares `detect_fits_grid`); not called separately since there is no ambiguous image FITS file to classify in this notebook."),
 	("read_fits_grid", true, true, "§15.2", "Reads RMmap.fits, alpha.fits, Qnu.fits, Unu.fits, Tnu.fits produced by MOOSE_from_config."),
 	("read_fits_grid_stack", true, false, "—", "Multi-file variant of `read_fits_grid`; §15.2 reads single FITS cubes (one file per quantity), not a stack of separate files."),

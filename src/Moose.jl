@@ -17,6 +17,7 @@ using LinearAlgebra
 using Logging
 using Random
 using SHA
+using Serialization
 using TOML
 
 include(joinpath("Utils", "ArrayMath.jl"))

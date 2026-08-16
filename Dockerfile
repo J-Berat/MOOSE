@@ -35,7 +35,7 @@ RUN for attempt in 1 2 3; do \
         sleep 10; \
     done
 
-COPY README.md Version.toml setup.jl ./
+COPY README.md setup.jl ./
 COPY config ./config
 COPY python ./python
 COPY src ./src

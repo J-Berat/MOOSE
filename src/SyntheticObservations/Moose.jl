@@ -672,6 +672,9 @@ function _write_completion_manifest(cfg::RunConfig, simu, los, config_hash)
         "outputs" => outputs, "completed_at" => string(now()),
     )
     atomic_write_text(joinpath(root, COMPLETION_MANIFEST), JSON.json(manifest))
+    # The completion manifest is now the durable LOS-level checkpoint. Remove
+    # the finer tiled checkpoint only after that manifest exists atomically.
+    rm(joinpath(root, TILE_CHECKPOINT); force = true)
 end
 
 function _can_resume_los(cfg::RunConfig, simu, los, config_hash)
@@ -946,6 +949,14 @@ function _run_moose_processing(cfg::RunConfig; quiet::Bool = false, persisted_co
     for (i, simu) in enumerate(cfg.simulations)
         @info "Processing simulation" simulation = simu
 
+        checkpoint_signature = if cfg.resume == "safe" && cfg.tile_size !== nothing
+            inputs = [_fingerprint_file(path) for path in _resume_input_paths(cfg, simu)]
+            canonical_inputs = [[input["path"], input["size"], input["mtime"]] for input in inputs]
+            bytes2hex(sha256(resume_hash * JSON.json(canonical_inputs)))
+        else
+            nothing
+        end
+
         for LOS in cfg.chosen_LOS
             if _can_resume_los(cfg, simu, LOS, resume_hash)
                 @info "Skipping completed line of sight" simulation=simu los=LOS manifest=joinpath(_los_output_root(simu, LOS), COMPLETION_MANIFEST)
@@ -969,7 +980,7 @@ function _run_moose_processing(cfg::RunConfig; quiet::Bool = false, persisted_co
                     float_type = float_type, tile_rows = cfg.tile_size, field_sources = cfg.field_sources,
                     physical_mask = cfg.physical_mask, density_kind = cfg.density_kind,
                     mean_molecular_weight = cfg.mean_molecular_weight, hydrogen_mass_g = cfg.hydrogen_mass_g,
-                    outputs = cfg.outputs)
+                    outputs = cfg.outputs, checkpoint_signature = checkpoint_signature)
             elseif cfg.ne_option == "2"
                 ProcessSynchrotron(simu, LOS, cfg.faraday_rotation, cfg.responseSynchrotron, df, cfg.add_noise, cfg.SNR_nu,
                     cfg.kernel_size_synchrotron, ion_fraction, nuArray, PhiArray, PixelLength_pc, PixelLength_cm,
@@ -980,7 +991,7 @@ function _run_moose_processing(cfg::RunConfig; quiet::Bool = false, persisted_co
                     float_type = float_type, tile_rows = cfg.tile_size, field_sources = cfg.field_sources,
                     physical_mask = cfg.physical_mask, density_kind = cfg.density_kind,
                     mean_molecular_weight = cfg.mean_molecular_weight, hydrogen_mass_g = cfg.hydrogen_mass_g,
-                    outputs = cfg.outputs)
+                    outputs = cfg.outputs, checkpoint_signature = checkpoint_signature)
             else
                 ProcessSynchrotron(simu, LOS, cfg.faraday_rotation, cfg.responseSynchrotron, df, cfg.add_noise, cfg.SNR_nu,
                     cfg.kernel_size_synchrotron, nuArray, PhiArray, PixelLength_pc, PixelLength_cm,
@@ -991,7 +1002,7 @@ function _run_moose_processing(cfg::RunConfig; quiet::Bool = false, persisted_co
                     float_type = float_type, tile_rows = cfg.tile_size, field_sources = cfg.field_sources,
                     physical_mask = cfg.physical_mask, density_kind = cfg.density_kind,
                     mean_molecular_weight = cfg.mean_molecular_weight, hydrogen_mass_g = cfg.hydrogen_mass_g,
-                    outputs = cfg.outputs)
+                    outputs = cfg.outputs, checkpoint_signature = checkpoint_signature)
             end
             _write_completion_manifest(cfg, simu, LOS, resume_hash)
         end

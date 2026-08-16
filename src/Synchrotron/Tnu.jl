@@ -68,18 +68,33 @@ function emissivity_total_at_frequency!(buffer, B::Vector{Float64}, eps_interp::
     return buffer
 end
 
-function _Tnu!(T_nu, Bperp, nuArray, PixelLength_cm, interpolator; emissivity_cache=nothing)
-    eps_buffer = similar(Bperp, Float64)
-    eps_line_buffer = emissivity_cache === nothing ? similar(interpolator.B, Float64) : nothing
+function _Tnu!(T_nu, Bperp, nuArray, PixelLength_cm, interpolator;
+              emissivity_cache=nothing, interp_indices=nothing)
+    B = interpolator.B
+    eps_line_buffer = emissivity_cache === nothing ? similar(B, Float64) : nothing
+    # The bracketing interval of each cell in the B grid is frequency independent,
+    # so the binary search runs once per sightline rather than once per channel.
+    indices = interp_indices === nothing ? similar(Bperp, Int) : interp_indices
+    emissivity_cache === nothing || _emissivity_brackets!(indices, B, Bperp)
 
     for i in eachindex(nuArray)
         nui = nuArray[i]
-        cache_col = emissivity_cache === nothing ? nothing : view(emissivity_cache, :, i)
-        emissivity_total_at_frequency!(eps_buffer, interpolator.B, interpolator.eps_interp, Bperp, nui;
-            eps_cache_col=cache_col, eps_line_buffer=eps_line_buffer)
+        if emissivity_cache === nothing
+            @inbounds for j in eachindex(B)
+                eps_line_buffer[j] = interpolator.eps_interp(B[j], nui)
+            end
+        end
 
-        Inui = sum(eps_buffer) * PixelLength_cm
-        T_nu[i] = BrightnessTemperature(nui, Inui)
+        # Accumulate the line-of-sight emissivity directly: the intermediate
+        # per-cell buffer was only ever consumed by `sum`.
+        Inui = 0.0
+        @inbounds for idx in eachindex(Bperp)
+            Inui += emissivity_cache === nothing ?
+                linear_interp_extrapolated(B, eps_line_buffer, Float64(Bperp[idx])) :
+                _linear_interp_at_index(B, emissivity_cache, i, Float64(Bperp[idx]), indices[idx])
+        end
+
+        T_nu[i] = BrightnessTemperature(nui, Inui * PixelLength_cm)
     end
 
     return T_nu
@@ -131,11 +146,20 @@ function Tnu3D(Bperpcube, nuArray, df, PixelLength_cm)
     interpolator = TemperatureInterpolator(df)
     emissivity_cache = build_emissivity_frequency_cache(interpolator, nuArray)
 
-    Threads.@threads for idx in CartesianIndices((1:nx, 1:ny))
-        i, j = idx[1], idx[2]
-        @views Bperp_vec = Bperpcube[i, j, :]
-        @views tdest = T_nu[i, j, :]
-        _Tnu!(tdest, Bperp_vec, nuArray, PixelLength_cm, interpolator; emissivity_cache=emissivity_cache)
+    depth = size(Bperpcube, 3)
+    pixels = CartesianIndices((1:nx, 1:ny))
+
+    @sync for part in _threaded_pixel_chunks(length(pixels))
+        Threads.@spawn begin
+            indices = Vector{Int}(undef, depth)
+            for p in part
+                i, j = Tuple(pixels[p])
+                @views Bperp_vec = Bperpcube[i, j, :]
+                @views tdest = T_nu[i, j, :]
+                _Tnu!(tdest, Bperp_vec, nuArray, PixelLength_cm, interpolator;
+                    emissivity_cache=emissivity_cache, interp_indices=indices)
+            end
+        end
     end
 
     return T_nu

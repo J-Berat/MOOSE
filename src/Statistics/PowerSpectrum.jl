@@ -76,6 +76,14 @@ function radial_psd(field::AbstractMatrix; pixel_size::Real = 1.0, nbins::Union{
     kx, ky, psd2d = power_spectrum_2d(field; pixel_size = pixel_size, center = true,
         detrend_mean = detrend_mean, normalize = normalize, log_progress = log_progress)
 
+    return _radial_bin_psd(kx, ky, psd2d; nbins = nbins, log_progress = log_progress)
+end
+
+# Radial binning of an already-computed centered 2D PSD. Kept separate so callers
+# that need both the 2D map and its radial average pay for a single FFT.
+function _radial_bin_psd(kx, ky, psd2d::AbstractMatrix; nbins::Union{Int, Nothing} = nothing,
+    log_progress::Bool = false)
+
     nx, ny = size(psd2d)
 
     nbins = isnothing(nbins) ? max(floor(Int, min(nx, ny) / 2), 1) : nbins
@@ -153,8 +161,7 @@ function plot_power_spectrum_figure(field::AbstractMatrix; pixel_size::Real = 1.
 
     kx, ky, psd2d = power_spectrum_2d(field; pixel_size = pixel_size, center = true,
         detrend_mean = detrend_mean, normalize = normalize)
-    k, psd1d = radial_psd(field; pixel_size = pixel_size, nbins = nbins,
-        detrend_mean = detrend_mean, normalize = normalize)
+    k, psd1d = _radial_bin_psd(kx, ky, psd2d; nbins = nbins)
 
     eps_val = eps(real(eltype(psd2d)))
     heatmap_values = log2d ? log10.(psd2d .+ eps_val) : psd2d

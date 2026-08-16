@@ -38,6 +38,35 @@ imagF = [...]
 
 const _RM_SYNTHESIS_BLOCK_SIZE = 64
 
+function _validate_faraday_axes(nuArray::AbstractArray, PhiArray::AbstractArray;
+                                min_frequencies::Int = 1,
+                                require_frequency_span::Bool = false)
+    length(nuArray) >= min_frequencies || throw(ArgumentError(
+        "At least $min_frequencies frequency channel(s) are required."))
+    isempty(PhiArray) && throw(ArgumentError("PhiArray must not be empty."))
+    all(nu -> isfinite(nu) && nu > 0, nuArray) || throw(ArgumentError(
+        "nuArray must contain only positive, finite frequencies."))
+    all(isfinite, PhiArray) || throw(ArgumentError(
+        "PhiArray must contain only finite Faraday depths."))
+    if require_frequency_span
+        extrema(nuArray)[1] < extrema(nuArray)[2] || throw(ArgumentError(
+            "At least two distinct frequencies are required."))
+    end
+    return nothing
+end
+
+function _validate_rmsynthesis_inputs(Q::AbstractArray, U::AbstractArray,
+                                      nuArray::AbstractArray, PhiArray::AbstractArray)
+    size(Q) == size(U) || throw(ArgumentError(
+        "Q and U must have the same size (got $(size(Q)) and $(size(U)))."))
+    1 <= ndims(Q) <= 3 || throw(ArgumentError(
+        "Q and U must be 1D, 2D, or 3D arrays."))
+    _validate_faraday_axes(nuArray, PhiArray)
+    size(Q, ndims(Q)) == length(nuArray) || throw(ArgumentError(
+        "The last Q/U dimension ($(size(Q, ndims(Q)))) must match nuArray ($(length(nuArray)))."))
+    return nothing
+end
+
 function _rmsynthesis_mul!(F::AbstractMatrix{CT}, P::AbstractMatrix{CT}, a,
                            PhiArray, scale::T; log_progress::Bool = false) where {T<:Real, CT<:Complex{T}}
     nlambda = size(P, 2)
@@ -71,6 +100,7 @@ end
 
 function RMSynthesis(Q::AbstractArray, U::AbstractArray, nuArray::AbstractArray, PhiArray::AbstractArray; log_progress::Bool = false)
 
+    _validate_rmsynthesis_inputs(Q, U, nuArray, PhiArray)
     log_progress && @info "Starting RM synthesis" n_phi = length(PhiArray) n_lambda = length(nuArray)
 
     LambdaSqArray = @. (C_m/nuArray)^2
@@ -180,6 +210,7 @@ fwhmRMSF = ...
 """
 function getRMSF(nuArray::AbstractArray, PhiArray::AbstractArray; log_progress::Bool = false)
 
+    _validate_faraday_axes(nuArray, PhiArray; min_frequencies=2, require_frequency_span=true)
     log_progress && @info "Starting RMSF computation" n_phi = length(PhiArray)
     
     LambdaSqArray = @. (C_m/nuArray)^2
@@ -252,8 +283,10 @@ end
 function _uniform_step(values::AbstractArray; name::AbstractString = "sample grid")
     n = length(values)
     n >= 2 || error("At least two samples are required to infer a step size.")
+    all(isfinite, values) || throw(ArgumentError("$(name) must contain only finite values."))
 
     step = Float64(values[2]) - Float64(values[1])
+    !iszero(step) || throw(ArgumentError("$(name) must have a non-zero step."))
     tol = max(1e-10, 1e-8 * max(abs(step), maximum(abs, Float64.(values))))
     for i in 3:n
         local_step = Float64(values[i]) - Float64(values[i - 1])
@@ -320,8 +353,8 @@ diag.phi_max       # maximum recoverable |φ| (rad/m²)
 ```
 """
 function rmsf_diagnostics(nuArray::AbstractArray, PhiArray::AbstractArray)
-    length(nuArray) >= 2 || error("rmsf_diagnostics requires at least two frequencies.")
     length(PhiArray) >= 2 || error("rmsf_diagnostics requires at least two Faraday depths.")
+    _validate_faraday_axes(nuArray, PhiArray; min_frequencies=2, require_frequency_span=true)
 
     LambdaSqArray = @. (C_m / nuArray)^2
     nLambda = length(LambdaSqArray)

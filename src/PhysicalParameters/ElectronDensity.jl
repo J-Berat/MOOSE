@@ -133,10 +133,25 @@ PixelLength_pc = 0.1  # Example pixel length in parsecs
 dm_3d = DM(ne_3d, PixelLength_pc)
 println("3D DM: ", dm_3d)
 """
-DM(ne::AbstractVector, PixelLength_pc) = sum(x -> x * PixelLength_pc, ne)
+function _integrate_density_vector(ne::AbstractVector, PixelLength_pc::Real, transform;
+                                   nan_policy::Symbol)
+    _check_nan_policy(nan_policy)
+    isfinite(PixelLength_pc) || throw(ArgumentError("PixelLength_pc must be finite."))
+    if nan_policy === :error
+        all(isfinite, ne) || throw(ArgumentError("Density contains non-finite values."))
+    end
+    nan_policy !== :omit && return sum(x -> transform(x) * PixelLength_pc, ne)
 
-DM(ne::AbstractArray{<:Real, 3}, PixelLength_pc) =
-    dropdims(sum(x -> x * PixelLength_pc, ne; dims=3), dims=3)
+    values = (transform(x) * PixelLength_pc for x in ne if isfinite(x))
+    result = sum(values; init=0.0)
+    any(isfinite, ne) ? result : NaN
+end
+
+DM(ne::AbstractVector, PixelLength_pc; nan_policy::Symbol=:propagate) =
+    _integrate_density_vector(ne, PixelLength_pc, identity; nan_policy)
+
+DM(ne::AbstractArray{<:Real, 3}, PixelLength_pc; nan_policy::Symbol=:propagate) =
+    intLOS(ne, PixelLength_pc; nan_policy)
 
 """
     EM(ne::Vector{T}, PixelLength_pc::Float64) -> Float64
@@ -175,10 +190,35 @@ ne_3d = rand(100, 100, 100)  # Example 3D electron density data
 em_3d = EM(ne_3d, PixelLength_pc)
 println("3D EM: ", em_3d)
 """
-EM(ne::AbstractVector, PixelLength_pc) = sum(x -> abs2(x) * PixelLength_pc, ne)
+EM(ne::AbstractVector, PixelLength_pc; nan_policy::Symbol=:propagate) =
+    _integrate_density_vector(ne, PixelLength_pc, abs2; nan_policy)
 
-EM(ne::AbstractArray{<:Real, 3}, PixelLength_pc) =
-    dropdims(sum(x -> abs2(x) * PixelLength_pc, ne; dims=3), dims=3)
+function EM(ne::AbstractArray{<:Real, 3}, PixelLength_pc;
+            nan_policy::Symbol=:propagate)
+    _check_nan_policy(nan_policy)
+    isfinite(PixelLength_pc) || throw(ArgumentError("PixelLength_pc must be finite."))
+    if nan_policy === :error
+        all(isfinite, ne) || throw(ArgumentError("Density contains non-finite values."))
+    end
+    nan_policy !== :omit &&
+        return dropdims(sum(x -> abs2(x) * PixelLength_pc, ne; dims=3), dims=3)
+
+    T = float(promote_type(eltype(ne), typeof(PixelLength_pc)))
+    out = fill(T(NaN), size(ne, 1), size(ne, 2))
+    @inbounds for j in axes(ne, 2), i in axes(ne, 1)
+        acc = zero(T)
+        found = false
+        for k in axes(ne, 3)
+            value = ne[i, j, k]
+            if isfinite(value)
+                acc += abs2(value) * PixelLength_pc
+                found = true
+            end
+        end
+        found && (out[i, j] = acc)
+    end
+    return out
+end
 
 """
     WolfireConstants() -> Tuple{Float64, Float64, Float64, Float64}

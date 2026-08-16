@@ -14,7 +14,7 @@ G(x) = x * (besselk(2/3,x))
 
 relativistic_ve(E) = C*(sqrt(1-(1/(1+E/ELECTRON_ENERGY_AT_REST_eV)^2)))
 
-j_e(E,a=-1.3,b=1.9) = J_0 * E^a / (E+E_0)^b
+j_e(E,a=-1.3,b=1.9) = J_0 * E^a / (E+E_0)^b #Padovani 2021
 
 je_ve_ratio(E) = j_e(E) / relativistic_ve(E)
 

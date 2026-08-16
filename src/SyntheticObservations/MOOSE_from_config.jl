@@ -387,8 +387,8 @@ function build_config(cfg, config_path)
         "The `rm` and `fdf` output groups require Faraday rotation."; code=:invalid_outputs)
     rm_clean_enabled && !("fdf" in selected_outputs) && throw_config_error(
         "RM-CLEAN requires the `fdf` output group."; code=:invalid_outputs)
-    tile_size !== nothing && length(selected_outputs) < 6 && throw_config_error(
-        "Selective outputs are not supported with `tile_size` yet; use `outputs: [\"all\"]` or remove `tile_size`."; code=:invalid_outputs)
+    tile_size !== nothing && selected_outputs == Set(["diagnostics"]) && throw_config_error(
+        "The `diagnostics` output group cannot be used alone with `tile_size`: tiled processing does not retain full Q/U/T cubes for plots."; code=:invalid_outputs)
 
     return RunConfig(
         base_dir,

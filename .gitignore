@@ -4,3 +4,12 @@
 .fuse_hidden*
 __pycache__/
 *.py[cod]
+
+# Generated notebook artifacts
+/notebooks/*.html
+/outputs/*
+!/outputs/.gitkeep
+
+# Downloaded scientific datasets (see README.md)
+/data/*.fits
+/allsky_RM_julia_nside512.fits

@@ -51,20 +51,24 @@ function _write_integrated_quantities(resultspath, B1, B2, BLOS, T, ne, Bperpcub
 end
 
 function _max_finite_cube(cube::AbstractArray{<:Real, 3})
-    out = Matrix{eltype(cube)}(undef, size(cube, 1), size(cube, 2))
-    nan = convert(eltype(out), NaN)
+    nx, ny = size(cube, 1), size(cube, 2)
+    best = fill(-Inf, nx, ny)
 
-    @inbounds for j in axes(cube, 2), i in axes(cube, 1)
-        best = -Inf
-        found = false
-        for k in axes(cube, 3)
+    # Slice-major traversal keeps the innermost index on the contiguous
+    # dimension instead of striding by nx*ny along each sightline.
+    @inbounds for k in axes(cube, 3)
+        for j in axes(cube, 2), i in axes(cube, 1)
             value = cube[i, j, k]
-            if isfinite(value)
-                best = max(best, Float64(value))
-                found = true
-            end
+            isfinite(value) && (best[i, j] = max(best[i, j], Float64(value)))
         end
-        out[i, j] = found ? convert(eltype(out), best) : nan
+    end
+
+    out = Matrix{eltype(cube)}(undef, nx, ny)
+    nan = convert(eltype(out), NaN)
+    # `best` only ever receives finite values, so a non-finite entry means the
+    # sightline had no valid cell at all.
+    @inbounds for idx in eachindex(out, best)
+        out[idx] = isfinite(best[idx]) ? convert(eltype(out), best[idx]) : nan
     end
 
     return out
@@ -341,6 +345,7 @@ function _process_synchrotron_common(
     mean_molecular_weight::Real=1.0,
     hydrogen_mass_g::Real=M_p,
     outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]),
+    checkpoint_signature=nothing,
 )
     selected_outputs = Set(String.(outputs))
     want(name) = name in selected_outputs
@@ -381,6 +386,8 @@ function _process_synchrotron_common(
                 density_kind = density_kind,
                 mean_molecular_weight = mean_molecular_weight,
                 hydrogen_mass_g = hydrogen_mass_g,
+                outputs = selected_outputs,
+                checkpoint_signature = checkpoint_signature,
             )
         end
         return _process_synchrotron_tiled(
@@ -398,6 +405,8 @@ function _process_synchrotron_common(
             density_kind = density_kind,
             mean_molecular_weight = mean_molecular_weight,
             hydrogen_mass_g = hydrogen_mass_g,
+            outputs = selected_outputs,
+            checkpoint_signature = checkpoint_signature,
         )
     end
 
@@ -653,7 +662,8 @@ function ProcessSynchrotron(simu::AbstractString, LOS, FaradayRotation::Abstract
                        rm_clean_enabled::Bool = false, rm_clean_gain::Real = 0.1, rm_clean_niter::Integer = 1000, rm_clean_threshold::Real = 0.0,
                        float_type::Type{<:AbstractFloat} = Float64, tile_rows::Union{Nothing, Integer} = nothing, field_sources=nothing,
                        physical_mask=nothing, density_kind::AbstractString="number_density", mean_molecular_weight::Real=1.0,
-                       hydrogen_mass_g::Real=M_p, outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]))
+                       hydrogen_mass_g::Real=M_p, outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]),
+                       checkpoint_signature=nothing)
     return _process_synchrotron_common(
         simu,
         LOS,
@@ -687,6 +697,7 @@ function ProcessSynchrotron(simu::AbstractString, LOS, FaradayRotation::Abstract
         mean_molecular_weight = mean_molecular_weight,
         hydrogen_mass_g = hydrogen_mass_g,
         outputs = outputs,
+        checkpoint_signature = checkpoint_signature,
     )
 end
 
@@ -697,7 +708,8 @@ function ProcessSynchrotron(simu::String, LOS, FaradayRotation::String, response
                        rm_clean_enabled::Bool = false, rm_clean_gain::Real = 0.1, rm_clean_niter::Integer = 1000, rm_clean_threshold::Real = 0.0,
                        float_type::Type{<:AbstractFloat} = Float64, tile_rows::Union{Nothing, Integer} = nothing, field_sources=nothing,
                        physical_mask=nothing, density_kind::AbstractString="number_density", mean_molecular_weight::Real=1.0,
-                       hydrogen_mass_g::Real=M_p, outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]))
+                       hydrogen_mass_g::Real=M_p, outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]),
+                       checkpoint_signature=nothing)
     return _process_synchrotron_common(
         simu,
         LOS,
@@ -731,6 +743,7 @@ function ProcessSynchrotron(simu::String, LOS, FaradayRotation::String, response
         mean_molecular_weight = mean_molecular_weight,
         hydrogen_mass_g = hydrogen_mass_g,
         outputs = outputs,
+        checkpoint_signature = checkpoint_signature,
     )
 end
 
@@ -741,7 +754,8 @@ function ProcessSynchrotron(simu::String, LOS, FaradayRotation::String, response
                        rm_clean_enabled::Bool = false, rm_clean_gain::Real = 0.1, rm_clean_niter::Integer = 1000, rm_clean_threshold::Real = 0.0,
                        float_type::Type{<:AbstractFloat} = Float64, tile_rows::Union{Nothing, Integer} = nothing, field_sources=nothing,
                        physical_mask=nothing, density_kind::AbstractString="number_density", mean_molecular_weight::Real=1.0,
-                       hydrogen_mass_g::Real=M_p, outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]))
+                       hydrogen_mass_g::Real=M_p, outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]),
+                       checkpoint_signature=nothing)
     return _process_synchrotron_common(
         simu,
         LOS,
@@ -775,5 +789,6 @@ function ProcessSynchrotron(simu::String, LOS, FaradayRotation::String, response
         mean_molecular_weight = mean_molecular_weight,
         hydrogen_mass_g = hydrogen_mass_g,
         outputs = outputs,
+        checkpoint_signature = checkpoint_signature,
     )
 end

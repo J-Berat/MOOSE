@@ -109,6 +109,26 @@ end
     @test Moose.DM(cube, pixel_length) ≈ dropdims(sum(cube .* pixel_length, dims = 3), dims = 3)
     @test Moose.EM(cube, pixel_length) ≈ dropdims(sum(cube .^ 2 .* pixel_length, dims = 3), dims = 3)
     @test Moose.intLOS(cube, pixel_length) ≈ dropdims(sum(cube .* pixel_length, dims = 3), dims = 3)
+
+    masked = copy(cube)
+    masked[1, 1, 2] = NaN
+    masked[2, 2, :] .= NaN
+    @test isnan(Moose.intLOS(masked, pixel_length)[1, 1])
+    omitted_int = Moose.intLOS(masked, pixel_length; nan_policy=:omit)
+    @test omitted_int[1, 1] ≈ (masked[1, 1, 1] + masked[1, 1, 3]) * pixel_length
+    @test isnan(omitted_int[2, 2])
+    @test_throws ArgumentError Moose.intLOS(masked, pixel_length; nan_policy=:error)
+
+    omitted_sigma = Moose.sigmaLOS(masked; nan_policy=:omit)
+    @test omitted_sigma[1, 1] ≈ Moose.std([masked[1, 1, 1], masked[1, 1, 3]])
+    @test isnan(omitted_sigma[2, 2])
+    @test_throws ArgumentError Moose.sigmaLOS(masked; nan_policy=:invalid)
+
+    profile = [1.0, NaN, 3.0]
+    @test isnan(Moose.DM(profile, pixel_length))
+    @test Moose.DM(profile, pixel_length; nan_policy=:omit) == 2.0
+    @test Moose.EM(profile, pixel_length; nan_policy=:omit) == 5.0
+    @test_throws ArgumentError Moose.EM(profile, pixel_length; nan_policy=:error)
 end
 
 @testset "Physical cell mask" begin
@@ -257,6 +277,10 @@ end
     filtered = Moose.apply_to_array_xy(cube, H; n = 8, m = 8)
     @test size(filtered) == size(cube)
     @test filtered[:, :, 1] ≈ out
+    @test_throws ArgumentError Moose.apply_instrument_2d([1.0 NaN; 2.0 3.0], ones(2, 2))
+    @test_throws ArgumentError Moose.apply_instrument_2d(ones(2, 2), [1.0 Inf; 1.0 1.0])
+    @test_throws ErrorException Moose.instrument_bandpass_L(2, 2; Δx=NaN,
+        Lcut_small=1.0, Llarge=2.0, fNy=0.5)
 end
 
 @testset "Regression — LOS basis is cyclic for all three LOS (BUG-1)" begin
@@ -304,6 +328,16 @@ end
 
     @test Moose.EffectiveWidth([1.0, NaN, 2.0], [0.0, 1.0, 2.0]) == 1.5
     @test isnan(Moose.EffectiveWidth(fill(NaN, 3), 1:3))
+
+    summary_input = reshape([1.0, 2.0, 3.0, 10.0], 2, 2)
+    summary = Moose.SummarizeStats("z", summary_input, summary_input,
+        summary_input, summary_input, summary_input,
+        summary_input, summary_input, summary_input)
+    expected_stats = Moose.CalculateStatistics(summary_input)
+    @test summary.Quantity == ["Max", "IndMax", "Min", "IndMin", "Mean", "Median", "Std", "Skew", "Kurt"]
+    @test summary.n[6] == expected_stats[6]
+    @test summary.n[7] == expected_stats[7]
+    @test summary.n[9] == expected_stats[9]
 end
 
 @testset "Regression — band-pass filter selects requested scales (BUG-3)" begin
@@ -1621,6 +1655,102 @@ end
         @test isempty(filter(name -> endswith(name, ".part"), readdir(result_dir)))
     end
 
+    # A safe tiled run resumes from the last durable band checkpoint. Build a
+    # realistic interrupted state from a completed small run, then verify the
+    # checkpoint is consumed and the final products remain identical.
+    mktempdir() do dir
+        demo = make_demo_data(dir; npix = 5)
+        cfg = JSON.parsefile(demo.config_path)
+        cfg["tile_size"] = 2
+        cfg["resume"] = "safe"
+        write(demo.config_path, JSON.json(cfg))
+        Moose.MOOSE_from_config(demo.config_path; quiet = true)
+
+        root = joinpath(demo.simulation_dir, "z", "Synchrotron")
+        result_dir = joinpath(root, "WithFaraday")
+        cube_relpaths = [
+            "ne.fits",
+            joinpath.(Ref("WithFaraday"),
+                ["Qnu.fits", "Unu.fits", "Tnu.fits", "Pnu.fits", "polfrac.fits",
+                 "FDF.fits", "realFDF.fits", "imagFDF.fits"])...,
+        ]
+        expected_cubes = Dict(rel => read(FITS(joinpath(root, rel))[1]) for rel in cube_relpaths)
+
+        map_paths = Dict(
+            name => joinpath(root, "$(name).fits") for name in
+            ("intBtotal", "sigmaBtotal", "intne", "sigmane", "sigmaT", "intBLOS", "sigmaBLOS", "intBperp")
+        )
+        merge!(map_paths, Dict(
+            name => joinpath(result_dir, "$(name).fits") for name in
+            ("RMmap", "Pnumax", "polfracmax", "Pmax", "alpha", "alpha_err")
+        ))
+        maps2d = Dict(name => read(FITS(path)[1]) for (name, path) in map_paths)
+
+        run_cfg, _ = build_config(cfg, demo.config_path)
+        resume_cfg = Dict{String, Any}(String(k) => v for (k, v) in cfg)
+        delete!(resume_cfg, "resume")
+        resume_hash = Moose.moose_config_hash(resume_cfg)
+        inputs = [Moose._fingerprint_file(path) for path in Moose._resume_input_paths(run_cfg, demo.simulation_dir)]
+        canonical_inputs = [[input["path"], input["size"], input["mtime"]] for input in inputs]
+        signature = bytes2hex(Moose.sha256(resume_hash * JSON.json(canonical_inputs)))
+
+        rm(joinpath(root, Moose.COMPLETION_MANIFEST))
+        for rel in cube_relpaths
+            path = joinpath(root, rel)
+            mv(path, path * ".part")
+        end
+        Moose._write_tile_checkpoint(joinpath(root, Moose.TILE_CHECKPOINT), signature, 1, 3, maps2d)
+
+        @test_logs match_mode = :any (:info, "Resuming tiled processing from checkpoint")
+            Moose.MOOSE_from_config(demo.config_path; quiet = true)
+
+        @test !isfile(joinpath(root, Moose.TILE_CHECKPOINT))
+        @test isempty(filter(path -> endswith(path, ".part"),
+            [joinpath(dirpath, name) for (dirpath, _, names) in walkdir(root) for name in names]))
+        for (rel, expected) in expected_cubes
+            actual = read(FITS(joinpath(root, rel))[1])
+            @test all(@. (isnan(actual) & isnan(expected)) | isapprox(actual, expected; rtol = 1e-10, atol = 1e-12))
+        end
+
+        # A checkpoint is only valid when every selected streamed output is
+        # still present. If one .part file disappeared, discard the checkpoint
+        # and recompute every band instead of creating a sparse/empty cube.
+        rm(joinpath(root, Moose.COMPLETION_MANIFEST))
+        for rel in cube_relpaths
+            path = joinpath(root, rel)
+            mv(path, path * ".part")
+        end
+        rm(joinpath(result_dir, "Qnu.fits.part"))
+        Moose._write_tile_checkpoint(joinpath(root, Moose.TILE_CHECKPOINT), signature, 1, 3, maps2d)
+
+        @test_logs match_mode = :any (:warn, r"missing partial output files")
+            Moose.MOOSE_from_config(demo.config_path; quiet = true)
+
+        @test !isfile(joinpath(root, Moose.TILE_CHECKPOINT))
+        @test isempty(filter(path -> endswith(path, ".part"),
+            [joinpath(dirpath, name) for (dirpath, _, names) in walkdir(root) for name in names]))
+        for (rel, expected) in expected_cubes
+            actual = read(FITS(joinpath(root, rel))[1])
+            @test all(@. (isnan(actual) & isnan(expected)) | isapprox(actual, expected; rtol = 1e-10, atol = 1e-12))
+        end
+    end
+
+    # Selective output groups are honored in tiled cartesian mode.
+    mktempdir() do dir
+        demo = make_demo_data(dir; npix = 5)
+        cfg = JSON.parsefile(demo.config_path)
+        cfg["tile_size"] = 2
+        cfg["outputs"] = ["rm"]
+        write(demo.config_path, JSON.json(cfg))
+
+        Moose.MOOSE_from_config(demo.config_path; quiet = true)
+
+        root = joinpath(demo.simulation_dir, "z", "Synchrotron")
+        @test Moose._output_files(root) == [joinpath("WithFaraday", "RMmap.fits")]
+        rmmap = read(FITS(joinpath(root, "WithFaraday", "RMmap.fits"))[1])
+        @test all(isapprox.(rmmap, demo.expected.rm; rtol = 1e-10))
+    end
+
     # float32 + tiling combine.
     mktempdir() do dir
         demo = make_demo_data(dir; npix = 4)
@@ -1909,6 +2039,12 @@ end
     @test fdf[1, :] ≈ fdf0[1, :]
     @test fdf[3, :] ≈ fdf0[3, :]
 
+    @test_throws ArgumentError Moose.RMSynthesis(q, u[:, 1:1], nu, phi)
+    @test_throws ArgumentError Moose.RMSynthesis(q, u, [1.0e9, NaN], phi)
+    @test_throws ArgumentError Moose.RMSynthesis(q, u, [1.0e9, 0.0], phi)
+    @test_throws ArgumentError Moose.RMSynthesis(q, u, nu, [0.0, NaN])
+    @test_throws ArgumentError Moose.RMSynthesis(q, u, [1.0e9], phi)
+
     clean = Moose.RMClean(q, u, nu, phi; gain=0.1, niter=10)
     @test all(isnan, clean.cleanFDF[2, :])
     @test all(isnan, clean.residual[2, :])
@@ -2025,6 +2161,25 @@ end
         int_tiled = Moose.read_healpix_stack(joinpath(tiled_root, "intBtotal.fits"))
         int_plain = Moose.read_healpix_stack(joinpath(plain_dir, "z", "Synchrotron", "intBtotal.fits"))
         @test int_tiled.pixels ≈ int_plain.pixels rtol = 1e-10
+
+        # Selective output groups also apply to the tiled HEALPix path.
+        selective_dir = make_hp_sim(joinpath(base_dir, "hp_selective"))
+        selective_cfg = copy(base_cfg)
+        selective_cfg["simulations"] = [selective_dir]
+        selective_cfg["tile_size"] = 5
+        selective_cfg["outputs"] = ["spectral_index"]
+        selective_config_path = joinpath(base_dir, "moose_config_selective.json")
+        write(selective_config_path, JSON.json(selective_cfg))
+
+        Moose.MOOSE_from_config(selective_config_path; quiet = true)
+
+        selective_root = joinpath(selective_dir, "z", "Synchrotron")
+        @test Moose._output_files(selective_root) == [
+            joinpath("WithFaraday", "alpha.fits"),
+            joinpath("WithFaraday", "alpha_err.fits"),
+        ]
+        alpha = Moose.read_healpix_stack(joinpath(selective_root, "WithFaraday", "alpha.fits"))
+        @test size(alpha.pixels) == (12, 1)
     end
 end
 
@@ -2055,6 +2210,9 @@ end
     @test isapprox(Moose.rmsf_diagnostics(reverse(nu), phi).fwhm_theoretical,
                    diag.fwhm_theoretical; rtol = 1e-12)
     @test_throws ErrorException Moose.rmsf_diagnostics(nu, [-100.0, -50.0, 10.0, 100.0])
+    @test_throws ArgumentError Moose.rmsf_diagnostics([1.0e9, NaN], phi)
+    @test_throws ArgumentError Moose.rmsf_diagnostics(fill(1.0e9, 2), phi)
+    @test_throws ArgumentError Moose.getRMSF([1.0e9, 0.0], phi)
 
     mktempdir() do dir
         path = Moose.write_rmsf(dir, diag)

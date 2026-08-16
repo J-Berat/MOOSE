@@ -129,6 +129,17 @@ end
     end
 end
 
+# `Threads.@threads` may migrate a task between threads mid-iteration, so
+# `threadid()` is not a stable index into per-thread scratch space: two tasks can
+# end up sharing one buffer and silently corrupt each other's sightline. Partition
+# the pixel grid instead and let every task own its buffers for a whole chunk.
+function _threaded_pixel_chunks(npixels::Integer)
+    npixels <= 0 && return UnitRange{Int}[]
+    n = Int(npixels)
+    nchunks = max(1, min(Threads.nthreads(), n))
+    return collect(Iterators.partition(1:n, cld(n, nchunks)))
+end
+
 function _emissivity_brackets!(indices, xgrid::Vector{Float64}, values)
     last = length(xgrid) - 1
     @inbounds for k in eachindex(indices, values)
@@ -176,8 +187,10 @@ function _QUnu!(Qnu, Unu, Bperp, psi_src, RM, nuArray, PixelLength_cm, interpola
             eps_val = emissivity_cache === nothing ?
                 linear_interp_extrapolated(interpolator.B, eps_line_buffer, Float64(Bperp[idx])) :
                 _linear_interp_at_index(interpolator.B, emissivity_cache, i, Float64(Bperp[idx]), indices[idx])
-            sum_u += eps_val * sin(arg)
-            sum_q += eps_val * cos(arg)
+            # One argument reduction for both quadratures instead of two.
+            sin_arg, cos_arg = sincos(arg)
+            sum_u += eps_val * sin_arg
+            sum_q += eps_val * cos_arg
         end
 
         Unu[i] = BrightnessTemperature(nui, sum_u * PixelLength_cm)
@@ -237,28 +250,33 @@ function QUnu3D(Bperpcube, psi_src, RM, nuArray, df, PixelLength_cm; log_progres
     Unu = zeros(T, nx, ny, Nfreq)
     interpolator = EmissivityInterpolator(df)
     emissivity_cache = build_emissivity_frequency_cache(interpolator, nuArray)
-    interp_indices = Matrix{Int}(undef, size(Bperpcube, 3), Threads.maxthreadid())
-    total_pixels = nx * ny
+    depth = size(Bperpcube, 3)
+    pixels = CartesianIndices((1:nx, 1:ny))
+    total_pixels = length(pixels)
     progress_counter = Threads.Atomic{Int}(0)
     progress_step = max(floor(Int, total_pixels / 100), 1)
     progress_lock = ReentrantLock()
 
-    Threads.@threads for idx in CartesianIndices((1:nx, 1:ny))
-        i, j = idx[1], idx[2]
-        @views Bperp_vec = Bperpcube[i, j, :]
-        @views RM_vec = RM[i, j, :]
-        @views psi_src_vec = psi_src[i, j, :]
-        @views qdest = Qnu[i, j, :]
-        @views udest = Unu[i, j, :]
-        @views indices = interp_indices[:, Threads.threadid()]
-        _QUnu!(qdest, udest, Bperp_vec, psi_src_vec, RM_vec, nuArray, PixelLength_cm,
-            interpolator; emissivity_cache=emissivity_cache, interp_indices=indices)
+    @sync for part in _threaded_pixel_chunks(total_pixels)
+        Threads.@spawn begin
+            indices = Vector{Int}(undef, depth)
+            for p in part
+                i, j = Tuple(pixels[p])
+                @views Bperp_vec = Bperpcube[i, j, :]
+                @views RM_vec = RM[i, j, :]
+                @views psi_src_vec = psi_src[i, j, :]
+                @views qdest = Qnu[i, j, :]
+                @views udest = Unu[i, j, :]
+                _QUnu!(qdest, udest, Bperp_vec, psi_src_vec, RM_vec, nuArray, PixelLength_cm,
+                    interpolator; emissivity_cache=emissivity_cache, interp_indices=indices)
 
-        if log_progress
-            done = Threads.atomic_add!(progress_counter, 1) + 1
-            if done % progress_step == 0
-                lock(progress_lock) do
-                    print_progress(done, total_pixels; label="Computing Q/U (Faraday)")
+                if log_progress
+                    done = Threads.atomic_add!(progress_counter, 1) + 1
+                    if done % progress_step == 0
+                        lock(progress_lock) do
+                            print_progress(done, total_pixels; label="Computing Q/U (Faraday)")
+                        end
+                    end
                 end
             end
         end
@@ -313,9 +331,7 @@ function _QUnuNoFaraday!(Qnu, Unu, Bperp, psi_src, nuArray, PixelLength_cm, inte
         _emissivity_brackets!(indices, interpolator.B, Bperp)
     end
     @inbounds for idx in eachindex(psi_src, sins, coss)
-        arg = 2.0 * psi_src[idx]
-        sins[idx] = sin(arg)
-        coss[idx] = cos(arg)
+        sins[idx], coss[idx] = sincos(2.0 * psi_src[idx])
     end
 
     for i in 1:Nfreq
@@ -393,32 +409,34 @@ function QUnuNoFaraday3D(Bperpcube, psi_src, nuArray, df, PixelLength_cm; log_pr
     interpolator = EmissivityInterpolator(df)
     emissivity_cache = build_emissivity_frequency_cache(interpolator, nuArray)
     depth = size(Bperpcube, 3)
-    nthreads = Threads.maxthreadid()
-    interp_indices = Matrix{Int}(undef, depth, nthreads)
-    sin_angles = Matrix{Float64}(undef, depth, nthreads)
-    cos_angles = Matrix{Float64}(undef, depth, nthreads)
-    total_pixels = size(Bperpcube, 1) * size(Bperpcube, 2)
+    pixels = CartesianIndices((1:size(Bperpcube,1), 1:size(Bperpcube,2)))
+    total_pixels = length(pixels)
     progress_counter = Threads.Atomic{Int}(0)
     progress_step = max(floor(Int, total_pixels / 100), 1)
     progress_lock = ReentrantLock()
 
-    Threads.@threads for idx in CartesianIndices((1:size(Bperpcube,1), 1:size(Bperpcube,2)))
-        i, j = idx[1], idx[2]
-        @views Bperp_vec = Bperpcube[i,j,:]
-        @views psi_src_vec = psi_src[i,j,:]
-        @views qdest = Qnu[i, j, :]
-        @views udest = Unu[i, j, :]
-        tid = Threads.threadid()
-        _QUnuNoFaraday!(qdest, udest, Bperp_vec, psi_src_vec, nuArray, PixelLength_cm,
-            interpolator; emissivity_cache=emissivity_cache,
-            interp_indices=view(interp_indices, :, tid),
-            sin_angles=view(sin_angles, :, tid), cos_angles=view(cos_angles, :, tid))
+    @sync for part in _threaded_pixel_chunks(total_pixels)
+        Threads.@spawn begin
+            indices = Vector{Int}(undef, depth)
+            sins = Vector{Float64}(undef, depth)
+            coss = Vector{Float64}(undef, depth)
+            for p in part
+                i, j = Tuple(pixels[p])
+                @views Bperp_vec = Bperpcube[i,j,:]
+                @views psi_src_vec = psi_src[i,j,:]
+                @views qdest = Qnu[i, j, :]
+                @views udest = Unu[i, j, :]
+                _QUnuNoFaraday!(qdest, udest, Bperp_vec, psi_src_vec, nuArray, PixelLength_cm,
+                    interpolator; emissivity_cache=emissivity_cache,
+                    interp_indices=indices, sin_angles=sins, cos_angles=coss)
 
-        if log_progress
-            done = Threads.atomic_add!(progress_counter, 1) + 1
-            if done % progress_step == 0
-                lock(progress_lock) do
-                    print_progress(done, total_pixels; label="Computing Q/U")
+                if log_progress
+                    done = Threads.atomic_add!(progress_counter, 1) + 1
+                    if done % progress_step == 0
+                        lock(progress_lock) do
+                            print_progress(done, total_pixels; label="Computing Q/U")
+                        end
+                    end
                 end
             end
         end

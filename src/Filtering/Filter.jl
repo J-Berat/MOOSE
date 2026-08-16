@@ -8,6 +8,9 @@ pipeline.
 """
 function apply_instrument_2d(img::AbstractMatrix, H::AbstractMatrix)
     size(img) == size(H) || error("Filter shape mismatch: image size=$(size(img)) filter size=$(size(H))")
+    all(isfinite, img) || throw(ArgumentError(
+        "apply_instrument_2d requires finite image values; fill, crop, or inpaint masked pixels before the FFT."))
+    all(isfinite, H) || throw(ArgumentError("The Fourier filter H contains non-finite values."))
     return real.(ifft(fft(img) .* H))
 end
 
@@ -62,11 +65,11 @@ function instrument_bandpass_L(n::Int, m::Int;
                                fNy::Real)
     n > 0 || error("n must be positive, got $n")
     m > 0 || error("m must be positive, got $m")
-    Δx > 0 || error("Δx must be positive, got $Δx")
-    Δy > 0 || error("Δy must be positive, got $Δy")
-    Lcut_small > 0 || error("Lcut_small must be positive, got $Lcut_small")
-    Llarge > 0 || error("Llarge must be positive, got $Llarge")
-    fNy > 0 || error("fNy must be positive, got $fNy")
+    isfinite(Δx) && Δx > 0 || error("Δx must be positive and finite, got $Δx")
+    isfinite(Δy) && Δy > 0 || error("Δy must be positive and finite, got $Δy")
+    isfinite(Lcut_small) && Lcut_small > 0 || error("Lcut_small must be positive and finite, got $Lcut_small")
+    isfinite(Llarge) && Llarge > 0 || error("Llarge must be positive and finite, got $Llarge")
+    isfinite(fNy) && fNy > 0 || error("fNy must be positive and finite, got $fNy")
 
     # fftfreq(n, fs) expects the *sampling frequency* fs = 1/Δx, not the step Δx.
     # Spatial frequencies are then in cycles per unit of Δx (same unit as
