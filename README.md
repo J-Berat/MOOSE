@@ -71,6 +71,25 @@ MOOSE_from_config(demo.config_path; quiet=true)
 Results are written as FITS files alongside the selected simulation. Each run
 also records its configuration, provenance, and timing in `MOOSE_summary.log`.
 
+### Radio-frequency interference (RFI)
+
+Known contaminated frequency intervals can be flagged in the JSON
+configuration. Frequencies are expressed in MHz and interval endpoints are
+inclusive:
+
+```json
+"rfi": {
+  "enabled": true,
+  "ranges_mhz": [[125.0, 126.5], [137.0, 138.0]]
+}
+```
+
+Flagged channels remain on the regular spectral axis of the output FITS cubes
+and are filled with `NaN` in I/Q/U-derived products. Spectral-index fits ignore
+them, while RM synthesis, RMSF diagnostics, and RM-CLEAN use only unflagged
+channels. This preserves the exact FITS frequency grid and records the number
+of flagged channels in the `NRFICH` header keyword.
+
 ### Optional all-sky example data
 
 The Pluto tutorial can analyze the public Galactic Faraday rotation sky 2020
@@ -88,15 +107,14 @@ The script verifies the upstream SHA-256 checksum, extracts
 RING-ordered HEALPix map in Galactic coordinates. The data are distributed by
 their authors under the ODC-By 1.0 license.
 
-### Reprise après interruption
+### Resuming after an interruption
 
-Pour les grands calculs tuilés, activez ensemble `tile_size` et
-`"resume": "safe"`. MOOSE enregistre alors un checkpoint atomique après
-chaque bande terminée. Si le processus est interrompu, relancer exactement la
-même commande reprend à la bande suivante. Le checkpoint est ignoré et le
-calcul redémarre proprement si la configuration, les entrées ou le découpage
-en tuiles ont changé. Avec `"resume": "off"`, les fichiers partiels sont
-supprimés comme auparavant.
+For large tiled computations, enable both `tile_size` and `"resume": "safe"`.
+MOOSE then saves an atomic checkpoint after each completed band. If the process
+is interrupted, rerunning the exact same command resumes from the next band.
+The checkpoint is ignored and the computation restarts cleanly if the
+configuration, inputs, or tile layout have changed. With `"resume": "off"`,
+partial files are deleted as before.
 
 ```json
 {

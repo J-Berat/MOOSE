@@ -469,6 +469,7 @@ function _process_synchrotron_tiled_healpix(
     hydrogen_mass_g::Real=M_p,
     outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]),
     checkpoint_signature=nothing,
+    rfi_ranges=Tuple{Float64, Float64}[],
 )
     faraday_enabled = uppercase(FaradayRotation) == "Y"
     selected_outputs = Set(String.(outputs))
@@ -512,6 +513,9 @@ function _process_synchrotron_tiled_healpix(
         los_pixel_length_pc, los_pixel_length_cm, los_distance_array = compute_los_spacing(BoxLength_pc, nshell)
         nuArray_Hz = collect(Float64, nuArray) .* 1e6
         Nfreq = length(nuArray)
+        rfi_mask = _rfi_channel_mask(nuArray, rfi_ranges)
+        valid_channels = .!rfi_mask
+        valid_nu = nuArray[valid_channels]
 
         if faraday_enabled
             resultspath = joinpath(resultspath, "WithFaraday")
@@ -642,6 +646,7 @@ function _process_synchrotron_tiled_healpix(
                 nothing, nothing
             end
             Tband = need_t ? Tnu3D(Bperpband, nuArray, df, los_pixel_length_cm) : nothing
+            _apply_rfi_mask!(rfi_mask, Qband, Uband, Tband)
             Bperpband = nothing
             psi_src = nothing
             RMband = nothing
@@ -669,7 +674,7 @@ function _process_synchrotron_tiled_healpix(
             Tband = nothing
 
             if want("fdf")
-                FDF, realFDF, imagFDF = RMSynthesis(Qband, Uband, nuArray * 1e6, PhiArray; log_progress = false)
+                FDF, realFDF, imagFDF = RMSynthesis(Qband[:, :, valid_channels], Uband[:, :, valid_channels], valid_nu * 1e6, PhiArray; log_progress = false)
                 maps2d["Pmax"][jr] = vec(_max_finite_cube(FDF))
                 _write_healpix_band!(fdf_streams[1], FDF, jr)
                 _write_healpix_band!(fdf_streams[2], realFDF, jr)
@@ -709,7 +714,7 @@ function _process_synchrotron_tiled_healpix(
 
         if want("fdf")
             try
-                rmsf = rmsf_diagnostics(nuArray * 1e6, PhiArray)
+                rmsf = rmsf_diagnostics(valid_nu * 1e6, PhiArray)
                 @info "RMSF diagnostics" fwhm = rmsf.fwhm delta_phi_theory = rmsf.fwhm_theoretical phi_max = rmsf.phi_max max_scale = rmsf.max_scale
                 write_rmsf(resultspath, rmsf; ensure_path = false)
             catch err
@@ -761,6 +766,7 @@ function _process_synchrotron_tiled(
     hydrogen_mass_g::Real=M_p,
     outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]),
     checkpoint_signature=nothing,
+    rfi_ranges=Tuple{Float64, Float64}[],
 )
     faraday_enabled = uppercase(FaradayRotation) == "Y"
     selected_outputs = Set(String.(outputs))
@@ -769,6 +775,9 @@ function _process_synchrotron_tiled(
     need_t = want("stokes") || want("spectral_index")
     fits_metadata = copy(fits_metadata)
     fits_metadata["TILESIZE"] = tile_rows
+    rfi_mask = _rfi_channel_mask(nuArray, rfi_ranges)
+    valid_channels = .!rfi_mask
+    valid_nu = nuArray[valid_channels]
 
     handles = Dict{String, Tuple{FITS, Any}}()
     streams = _StreamedCube3D[]
@@ -933,6 +942,7 @@ function _process_synchrotron_tiled(
                 nothing, nothing
             end
             Tband = need_t ? Tnu3D(Bperpband, nuArray, df, los_pixel_length_cm) : nothing
+            _apply_rfi_mask!(rfi_mask, Qband, Uband, Tband)
             Bperpband = nothing
             psi_src = nothing
             RMband = nothing
@@ -960,7 +970,7 @@ function _process_synchrotron_tiled(
             Tband = nothing
 
             if want("fdf")
-                FDF, realFDF, imagFDF = RMSynthesis(Qband, Uband, nuArray * 1e6, PhiArray; log_progress = false)
+                FDF, realFDF, imagFDF = RMSynthesis(Qband[:, :, valid_channels], Uband[:, :, valid_channels], valid_nu * 1e6, PhiArray; log_progress = false)
                 maps2d["Pmax"][:, jr] = _max_finite_cube(FDF)
                 _write_band!(fdf_streams[1], FDF, jr)
                 _write_band!(fdf_streams[2], realFDF, jr)
@@ -1003,7 +1013,7 @@ function _process_synchrotron_tiled(
 
         if want("fdf")
             try
-                rmsf = rmsf_diagnostics(nuArray * 1e6, PhiArray)
+                rmsf = rmsf_diagnostics(valid_nu * 1e6, PhiArray)
                 @info "RMSF diagnostics" fwhm = rmsf.fwhm delta_phi_theory = rmsf.fwhm_theoretical phi_max = rmsf.phi_max max_scale = rmsf.max_scale
                 write_rmsf(resultspath, rmsf; ensure_path = false, metadata = fits_metadata)
             catch err

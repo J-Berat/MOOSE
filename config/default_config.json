@@ -25,6 +25,10 @@
     "end": 167.0,
     "step": 0.098
   },
+  "rfi": {
+    "enabled": false,
+    "ranges_mhz": []
+  },
   "faraday": {
     "enabled": true,
     "phimin": -20.0,

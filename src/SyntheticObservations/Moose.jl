@@ -445,6 +445,7 @@ struct RunConfig
     hydrogen_mass_g::Float64
     resume::String
     outputs::Set{String}
+    rfi_ranges::Vector{Tuple{Float64, Float64}}
 
     function RunConfig(
         base_dir,
@@ -487,6 +488,7 @@ struct RunConfig
         hydrogen_mass_g=M_p,
         resume="off",
         outputs=["all"],
+        rfi_ranges=Tuple{Float64, Float64}[],
     )
         precision_flag = lowercase(String(precision))
         precision_flag in ("float64", "float32") ||
@@ -556,6 +558,7 @@ struct RunConfig
             normalize_positive_config_float(hydrogen_mass_g, "hydrogen_mass_g"),
             resume_mode,
             output_set,
+            Tuple{Float64, Float64}[(Float64(lo), Float64(hi)) for (lo, hi) in rfi_ranges],
         )
     end
 end
@@ -608,6 +611,7 @@ function config_dict_from_struct(cfg::RunConfig)
         "tile_size" => cfg.tile_size,
         "field_sources" => cfg.field_sources,
         "physical_mask" => cfg.physical_mask,
+        "rfi" => Dict("enabled" => !isempty(cfg.rfi_ranges), "ranges_mhz" => [[lo, hi] for (lo, hi) in cfg.rfi_ranges]),
         "density_kind" => cfg.density_kind,
         "mean_molecular_weight" => cfg.mean_molecular_weight,
         "hydrogen_mass_g" => cfg.hydrogen_mass_g,
@@ -759,6 +763,7 @@ _human_bytes(bytes::Real) = bytes < 1024 ? "$(round(Int, bytes)) B" :
 """Validate input metadata and estimate the resources required by a run."""
 function preflight_plan(cfg::RunConfig; io::IO=stdout)
     nfreq = length(range(start=cfg.nustart, stop=cfg.nuend, step=cfg.dnu))
+    nrfi = count(_rfi_channel_mask(range(start=cfg.nustart, stop=cfg.nuend, step=cfg.dnu), cfg.rfi_ranges))
     nphi = cfg.faraday_rotation == "Y" ? length(range(start=cfg.phimin, stop=cfg.phimax, step=cfg.dphi)) : 0
     bytes_per = cfg.precision == "float32" ? 4 : 8
     entries = NamedTuple[]
@@ -769,7 +774,7 @@ function preflight_plan(cfg::RunConfig; io::IO=stdout)
     need_t = want("stokes") || want("spectral_index") || want("diagnostics")
 
     println(io, "MOOSE preflight plan")
-    println(io, "Frequency channels: $(nfreq)" * (nphi > 0 ? " | Faraday-depth channels: $(nphi)" : ""))
+    println(io, "Frequency channels: $(nfreq) ($(nrfi) RFI-flagged)" * (nphi > 0 ? " | Faraday-depth channels: $(nphi)" : ""))
     for simu in cfg.simulations
         grid = simulation_grid_kind(simu, cfg.field_sources)
         grid == :amr && cfg.tile_size !== nothing && throw_config_error(
@@ -921,6 +926,7 @@ function _run_moose_processing(cfg::RunConfig; quiet::Bool = false, persisted_co
         "DENSKIND" => cfg.density_kind,
         "DENSMU" => cfg.mean_molecular_weight,
         "MHG" => cfg.hydrogen_mass_g,
+        "NRFICH" => count(_rfi_channel_mask(nuArray, cfg.rfi_ranges)),
     )
     if cfg.ne_option == "3"
         missing_cubes = String[]
@@ -980,7 +986,7 @@ function _run_moose_processing(cfg::RunConfig; quiet::Bool = false, persisted_co
                     float_type = float_type, tile_rows = cfg.tile_size, field_sources = cfg.field_sources,
                     physical_mask = cfg.physical_mask, density_kind = cfg.density_kind,
                     mean_molecular_weight = cfg.mean_molecular_weight, hydrogen_mass_g = cfg.hydrogen_mass_g,
-                    outputs = cfg.outputs, checkpoint_signature = checkpoint_signature)
+                    outputs = cfg.outputs, checkpoint_signature = checkpoint_signature, rfi_ranges = cfg.rfi_ranges)
             elseif cfg.ne_option == "2"
                 ProcessSynchrotron(simu, LOS, cfg.faraday_rotation, cfg.responseSynchrotron, df, cfg.add_noise, cfg.SNR_nu,
                     cfg.kernel_size_synchrotron, ion_fraction, nuArray, PhiArray, PixelLength_pc, PixelLength_cm,
@@ -991,7 +997,7 @@ function _run_moose_processing(cfg::RunConfig; quiet::Bool = false, persisted_co
                     float_type = float_type, tile_rows = cfg.tile_size, field_sources = cfg.field_sources,
                     physical_mask = cfg.physical_mask, density_kind = cfg.density_kind,
                     mean_molecular_weight = cfg.mean_molecular_weight, hydrogen_mass_g = cfg.hydrogen_mass_g,
-                    outputs = cfg.outputs, checkpoint_signature = checkpoint_signature)
+                    outputs = cfg.outputs, checkpoint_signature = checkpoint_signature, rfi_ranges = cfg.rfi_ranges)
             else
                 ProcessSynchrotron(simu, LOS, cfg.faraday_rotation, cfg.responseSynchrotron, df, cfg.add_noise, cfg.SNR_nu,
                     cfg.kernel_size_synchrotron, nuArray, PhiArray, PixelLength_pc, PixelLength_cm,
@@ -1002,7 +1008,7 @@ function _run_moose_processing(cfg::RunConfig; quiet::Bool = false, persisted_co
                     float_type = float_type, tile_rows = cfg.tile_size, field_sources = cfg.field_sources,
                     physical_mask = cfg.physical_mask, density_kind = cfg.density_kind,
                     mean_molecular_weight = cfg.mean_molecular_weight, hydrogen_mass_g = cfg.hydrogen_mass_g,
-                    outputs = cfg.outputs, checkpoint_signature = checkpoint_signature)
+                    outputs = cfg.outputs, checkpoint_signature = checkpoint_signature, rfi_ranges = cfg.rfi_ranges)
             end
             _write_completion_manifest(cfg, simu, LOS, resume_hash)
         end

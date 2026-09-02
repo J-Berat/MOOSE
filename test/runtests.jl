@@ -316,6 +316,29 @@ end
     @test all(isfinite, @view Umasked[2:end, :, :])
 end
 
+@testset "RFI frequency-channel flagging" begin
+    nu = [120.0, 121.0, 122.0, 123.0, 124.0]
+    mask = Moose._rfi_channel_mask(nu, [(120.5, 122.0), (124.0, 124.0)])
+    @test mask == Bool[false, true, true, false, true]
+
+    Q = ones(2, 2, 5)
+    U = fill(2.0, 2, 2, 5)
+    T = fill(3.0, 2, 2, 5)
+    Moose._apply_rfi_mask!(mask, Q, U, T)
+    @test all(isnan, Q[:, :, mask])
+    @test all(isnan, U[:, :, mask])
+    @test all(isnan, T[:, :, mask])
+    @test all(==(1.0), Q[:, :, .!mask])
+    @test Moose._rfi_channel_mask(nu, Tuple{Float64, Float64}[]) == falses(5)
+
+    normalize_rfi = Moose.MooseFromConfig.normalize_rfi_ranges
+    @test normalize_rfi(Dict("rfi" => Dict("enabled" => true,
+        "ranges_mhz" => [[130, 131.5], Dict("min" => 140, "max" => 141)]))) ==
+        [(130.0, 131.5), (140.0, 141.0)]
+    @test isempty(normalize_rfi(Dict("rfi" => Dict("enabled" => false))))
+    @test_throws MooseError normalize_rfi(Dict("rfi_ranges_mhz" => [[130, 129]]))
+end
+
 @testset "NaN-aware descriptive statistics" begin
     data = [1.0 NaN; 4.0 -Inf]
     stats = Moose.CalculateStatistics(data)

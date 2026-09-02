@@ -148,6 +148,41 @@ function build_frequency_array(cfg)
     return start_numeric, end_numeric, step_numeric
 end
 
+function normalize_rfi_ranges(cfg)
+    raw = get(cfg, "rfi", get(cfg, "rfi_ranges_mhz", nothing))
+    raw === nothing && return Tuple{Float64, Float64}[]
+    if raw isa AbstractDict
+        enabled = normalize_yes_no_flag(get(raw, "enabled", true), "rfi.enabled")
+        enabled == "N" && return Tuple{Float64, Float64}[]
+        raw = get(raw, "ranges_mhz", get(raw, "ranges", nothing))
+        raw === nothing && throw_config_error(
+            "`rfi.ranges_mhz` is required when RFI flagging is enabled."; code=:invalid_rfi)
+    end
+    raw isa AbstractVector || throw_config_error(
+        "`rfi.ranges_mhz` must be an array of [min, max] frequency ranges."; code=:invalid_rfi)
+
+    ranges = Tuple{Float64, Float64}[]
+    for (index, item) in enumerate(raw)
+        if item isa AbstractVector && length(item) == 2
+            lo = parse_config_float(item[1], "rfi.ranges_mhz[$index][1]")
+            hi = parse_config_float(item[2], "rfi.ranges_mhz[$index][2]")
+        elseif item isa AbstractDict
+            lo = parse_config_float(get(item, "min", get(item, "start", nothing)), "rfi.ranges_mhz[$index].min")
+            hi = parse_config_float(get(item, "max", get(item, "end", nothing)), "rfi.ranges_mhz[$index].max")
+        else
+            throw_config_error(
+                "RFI range $index must be [min, max] or an object with min/max (MHz)."; code=:invalid_rfi)
+        end
+        isfinite(lo) && isfinite(hi) && lo > 0 && hi > 0 || throw_config_error(
+            "RFI range $index must contain positive finite frequencies."; code=:invalid_rfi)
+        lo <= hi || throw_config_error(
+            "RFI range $index is reversed: $lo MHz > $hi MHz."; code=:invalid_rfi)
+        push!(ranges, (lo, hi))
+    end
+    sort!(ranges; by=first)
+    return ranges
+end
+
 function build_faraday(cfg)
     faraday_cfg = get(cfg, "faraday", nothing)
     if faraday_cfg isa AbstractDict
@@ -316,6 +351,10 @@ function build_config(cfg, config_path)
     nuend = validate_positive_finite(nuend, "nuend")
     dnu = validate_positive_finite(dnu, "dnu")
     nuend > nustart || throw_config_error("`nuend` must be strictly greater than `nustart`."; code=:invalid_frequency)
+    rfi_ranges = normalize_rfi_ranges(cfg)
+    frequencies = collect(range(start=nustart, stop=nuend, step=dnu))
+    all(nu -> any(lo <= nu <= hi for (lo, hi) in rfi_ranges), frequencies) && throw_config_error(
+        "The configured RFI ranges flag every frequency channel."; code=:invalid_rfi)
 
     FaradayRotation, phimin, phimax, dphi = build_faraday(cfg)
     FaradayRotation = normalize_yes_no_flag(FaradayRotation, "FaradayRotation")
@@ -430,6 +469,7 @@ function build_config(cfg, config_path)
         hydrogen_mass_g = hydrogen_mass_g,
         resume = resume,
         outputs = outputs,
+        rfi_ranges = rfi_ranges,
     ), simu_paths
 end
 

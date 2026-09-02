@@ -259,6 +259,21 @@ function _add_noise!(Qnu, Unu, SNR_nu, rng)
     return nothing
 end
 
+"""Return the channels whose centre frequency falls inside an RFI range (MHz)."""
+function _rfi_channel_mask(nuArray, rfi_ranges)
+    isempty(rfi_ranges) && return falses(length(nuArray))
+    return BitVector(any(lo <= nu <= hi for (lo, hi) in rfi_ranges) for nu in nuArray)
+end
+
+function _apply_rfi_mask!(mask, arrays...)
+    any(mask) || return arrays
+    for array in arrays
+        array === nothing && continue
+        @views array[:, :, mask] .= eltype(array)(NaN)
+    end
+    return arrays
+end
+
 # Convert an array to the requested working precision. `Float64` (the default)
 # returns the input unchanged, preserving the historical behaviour exactly.
 _to_precision(::Type{T}, x::Nothing) where {T} = nothing
@@ -346,6 +361,7 @@ function _process_synchrotron_common(
     hydrogen_mass_g::Real=M_p,
     outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]),
     checkpoint_signature=nothing,
+    rfi_ranges=Tuple{Float64, Float64}[],
 )
     selected_outputs = Set(String.(outputs))
     want(name) = name in selected_outputs
@@ -388,6 +404,7 @@ function _process_synchrotron_common(
                 hydrogen_mass_g = hydrogen_mass_g,
                 outputs = selected_outputs,
                 checkpoint_signature = checkpoint_signature,
+                rfi_ranges = rfi_ranges,
             )
         end
         return _process_synchrotron_tiled(
@@ -407,6 +424,7 @@ function _process_synchrotron_common(
             hydrogen_mass_g = hydrogen_mass_g,
             outputs = selected_outputs,
             checkpoint_signature = checkpoint_signature,
+            rfi_ranges = rfi_ranges,
         )
     end
 
@@ -518,6 +536,15 @@ function _process_synchrotron_common(
         _add_noise!(Qnu, Unu, SNR_nu, rng)
     end
 
+
+    rfi_mask = _rfi_channel_mask(nuArray, rfi_ranges)
+    if any(rfi_mask)
+        _stage("Flagging $(count(rfi_mask)) RFI frequency channel(s)")
+        _apply_rfi_mask!(rfi_mask, Qnu, Unu, T_nu)
+    end
+    valid_channels = .!rfi_mask
+    valid_nu = nuArray[valid_channels]
+
     # The internal frequency axis is in MHz; FITS headers declare CUNIT3 = "Hz",
     # so the spectral axis is converted to Hz once, here, at write time.
     nuArray_Hz = collect(Float64, nuArray) .* 1e6
@@ -594,16 +621,16 @@ function _process_synchrotron_common(
         _stage("Performing RM synthesis")
         rmsf = nothing
         if hp_meta === nothing
-            FDF, realFDF, imagFDF = RMSynthesis(Qnu, Unu, nuArray * 1e6, PhiArray; log_progress = log_progress)
+            FDF, realFDF, imagFDF = RMSynthesis(Qnu[:, :, valid_channels], Unu[:, :, valid_channels], valid_nu * 1e6, PhiArray; log_progress = log_progress)
             Pmax = maxCube(FDF)
             WriteData3D(resultspath, FDF, "FDF", PhiArray; ensure_path=false, metadata=fits_metadata)
             WriteData3D(resultspath, realFDF, "realFDF", PhiArray; ensure_path=false, metadata=fits_metadata)
             WriteData3D(resultspath, imagFDF, "imagFDF", PhiArray; ensure_path=false, metadata=fits_metadata)
             WriteData2D(resultspath, Pmax, "Pmax"; ensure_path=false, metadata=fits_metadata)
         else
-            q_stack = HealpixStack(_healpix_stack_matrix(Qnu); nside=hp_meta.nside, order=hp_meta.order)
-            u_stack = HealpixStack(_healpix_stack_matrix(Unu); nside=hp_meta.nside, order=hp_meta.order)
-            hp_result = RMSynthesisHealpix(q_stack, u_stack, nuArray * 1e6, PhiArray; log_progress = log_progress)
+            q_stack = HealpixStack(_healpix_stack_matrix(Qnu)[:, valid_channels]; nside=hp_meta.nside, order=hp_meta.order)
+            u_stack = HealpixStack(_healpix_stack_matrix(Unu)[:, valid_channels]; nside=hp_meta.nside, order=hp_meta.order)
+            hp_result = RMSynthesisHealpix(q_stack, u_stack, valid_nu * 1e6, PhiArray; log_progress = log_progress)
             write_healpix_rm_result(resultspath, hp_result; overwrite=true)
             Pmax = maximum(hp_result.fdf, dims=2)
             _write_healpix_map_quantity(resultspath, Pmax, "Pmax", hp_meta)
@@ -613,12 +640,12 @@ function _process_synchrotron_common(
         # alongside the FDF products. If RM-CLEAN is requested, diagnostics are
         # required and failures should abort the run; otherwise they only warn.
         if rm_clean_enabled
-            rmsf = rmsf_diagnostics(nuArray * 1e6, PhiArray)
+            rmsf = rmsf_diagnostics(valid_nu * 1e6, PhiArray)
             @info "RMSF diagnostics" fwhm = rmsf.fwhm delta_phi_theory = rmsf.fwhm_theoretical phi_max = rmsf.phi_max max_scale = rmsf.max_scale
             write_rmsf(resultspath, rmsf; ensure_path=false, metadata=fits_metadata)
         else
             try
-                rmsf = rmsf_diagnostics(nuArray * 1e6, PhiArray)
+                rmsf = rmsf_diagnostics(valid_nu * 1e6, PhiArray)
                 @info "RMSF diagnostics" fwhm = rmsf.fwhm delta_phi_theory = rmsf.fwhm_theoretical phi_max = rmsf.phi_max max_scale = rmsf.max_scale
                 write_rmsf(resultspath, rmsf; ensure_path=false, metadata=fits_metadata)
             catch err
@@ -637,7 +664,7 @@ function _process_synchrotron_common(
                 )
                 _write_rmclean_cartesian(resultspath, clean_result; metadata=fits_metadata)
             else
-                clean_result = RMClean(q_stack.pixels, u_stack.pixels, nuArray * 1e6, PhiArray;
+                clean_result = RMClean(q_stack.pixels, u_stack.pixels, valid_nu * 1e6, PhiArray;
                     gain = rm_clean_gain,
                     threshold = rm_clean_threshold,
                     niter = rm_clean_niter,
@@ -663,7 +690,7 @@ function ProcessSynchrotron(simu::AbstractString, LOS, FaradayRotation::Abstract
                        float_type::Type{<:AbstractFloat} = Float64, tile_rows::Union{Nothing, Integer} = nothing, field_sources=nothing,
                        physical_mask=nothing, density_kind::AbstractString="number_density", mean_molecular_weight::Real=1.0,
                        hydrogen_mass_g::Real=M_p, outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]),
-                       checkpoint_signature=nothing)
+                       checkpoint_signature=nothing, rfi_ranges=Tuple{Float64, Float64}[])
     return _process_synchrotron_common(
         simu,
         LOS,
@@ -698,6 +725,7 @@ function ProcessSynchrotron(simu::AbstractString, LOS, FaradayRotation::Abstract
         hydrogen_mass_g = hydrogen_mass_g,
         outputs = outputs,
         checkpoint_signature = checkpoint_signature,
+        rfi_ranges = rfi_ranges,
     )
 end
 
@@ -709,7 +737,7 @@ function ProcessSynchrotron(simu::String, LOS, FaradayRotation::String, response
                        float_type::Type{<:AbstractFloat} = Float64, tile_rows::Union{Nothing, Integer} = nothing, field_sources=nothing,
                        physical_mask=nothing, density_kind::AbstractString="number_density", mean_molecular_weight::Real=1.0,
                        hydrogen_mass_g::Real=M_p, outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]),
-                       checkpoint_signature=nothing)
+                       checkpoint_signature=nothing, rfi_ranges=Tuple{Float64, Float64}[])
     return _process_synchrotron_common(
         simu,
         LOS,
@@ -744,6 +772,7 @@ function ProcessSynchrotron(simu::String, LOS, FaradayRotation::String, response
         hydrogen_mass_g = hydrogen_mass_g,
         outputs = outputs,
         checkpoint_signature = checkpoint_signature,
+        rfi_ranges = rfi_ranges,
     )
 end
 
@@ -755,7 +784,7 @@ function ProcessSynchrotron(simu::String, LOS, FaradayRotation::String, response
                        float_type::Type{<:AbstractFloat} = Float64, tile_rows::Union{Nothing, Integer} = nothing, field_sources=nothing,
                        physical_mask=nothing, density_kind::AbstractString="number_density", mean_molecular_weight::Real=1.0,
                        hydrogen_mass_g::Real=M_p, outputs=Set(["integrated", "stokes", "rm", "fdf", "spectral_index", "diagnostics"]),
-                       checkpoint_signature=nothing)
+                       checkpoint_signature=nothing, rfi_ranges=Tuple{Float64, Float64}[])
     return _process_synchrotron_common(
         simu,
         LOS,
@@ -790,5 +819,6 @@ function ProcessSynchrotron(simu::String, LOS, FaradayRotation::String, response
         hydrogen_mass_g = hydrogen_mass_g,
         outputs = outputs,
         checkpoint_signature = checkpoint_signature,
+        rfi_ranges = rfi_ranges,
     )
 end
